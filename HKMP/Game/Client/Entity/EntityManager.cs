@@ -31,6 +31,7 @@ namespace Hkmp.Game.Client.Entity {
 
             ModHooks.OnEnableEnemyHook += OnEnableEnemyHook;
             UnityEngine.SceneManagement.SceneManager.activeSceneChanged += OnSceneChanged;
+            UnityEngine.SceneManagement.SceneManager.sceneLoaded += OnSceneLoaded;
         }
 
         /**
@@ -133,6 +134,15 @@ namespace Hkmp.Game.Client.Entity {
             ThreadUtil.RunActionOnMainThread(OnSceneChangedCheckBattleGateObjects);
         }
 
+
+        private void OnSceneLoaded(Scene scene, LoadSceneMode mode) {
+            Logger.Get().Info(this, $"New scene loaded: {scene.name}");
+
+            if (scene.name == "Fungus2_15_boss" || scene.name == "GG_Mantis_Lords") {
+                ThreadUtil.RunActionOnMainThread(OnSceneChangedCheckMantisLords);
+            }
+        }
+
         private void OnSceneChangedCheckBattleGateObjects() {
             var bgObjects = GameObject.FindGameObjectsWithTag("Battle Gate");
             if (bgObjects.Length != 0) {
@@ -151,10 +161,45 @@ namespace Hkmp.Game.Client.Entity {
             }
         }
 
+        private void OnSceneChangedCheckMantisLords() {
+            // Mantis lord 1
+            var throneObject = GameObject.Find("Mantis Lord Throne 2");
+            // The mantis lords entities are not activated yet, so we need to find it through the parent object
+            var mainFightObject = GameObject.Find("Battle Main");
+            var mantisLordObject = mainFightObject.transform.Find("Mantis Lord").gameObject;
+            var challengePromptObject = GameObject.Find("Challenge Prompt");
+            var mantisLordEntity = new MantisLord(_netClient, 0, mantisLordObject, throneObject, challengePromptObject);
+            _entities[(EntityType.MantisLord, 0)] = mantisLordEntity;
+
+            Logger.Get().Info(this, $"Registering enabled enemy, type: {EntityType.MantisLord}, id: 0");
+
+            // Mantis lord S1
+            var throneS1Object = GameObject.Find("Mantis Lord Throne 1");
+            var subFightObject = GameObject.Find("Battle Sub");
+            var mantisLordS1Object = subFightObject.transform.Find("Mantis Lord S1").gameObject;
+
+            var mantisLordS1Entity = new MantisLordS1(_netClient, 0, mantisLordS1Object, throneS1Object);
+            _entities[(EntityType.MantisLordS1, 0)] = mantisLordS1Entity;
+
+            Logger.Get().Info(this, $"Registering enabled enemy, type: {EntityType.MantisLordS1}, id: 0");
+
+            // Mantis lord S2
+            var throneS2Object = GameObject.Find("Mantis Lord Throne 3");
+            var mantisLordS2Object = subFightObject.transform.Find("Mantis Lord S2").gameObject;
+            var mantisLordS2Entity = new MantisLordS2(_netClient, 0, mantisLordS2Object, throneS2Object);
+            _entities[(EntityType.MantisLordS2, 0)] = mantisLordS2Entity;
+
+            Logger.Get().Info(this, $"Registering enabled enemy, type: {EntityType.MantisLordS2}, id: 0");
+
+            if (_receivedSceneStatus) {
+                InitializeEntity(EntityType.MantisLord, 0);
+                InitializeEntity(EntityType.MantisLordS1, 0);
+                InitializeEntity(EntityType.MantisLordS2, 0);
+            }
+        }
+
         private bool OnEnableEnemyHook(GameObject enemy, bool isDead) {
             var enemyName = enemy.name;
-
-            Logger.Get().Info(this, $"OnEnableEnemyHook, name: {enemyName}");
 
             if (!InstantiateEntity(
                 enemyName,
@@ -169,7 +214,7 @@ namespace Hkmp.Game.Client.Entity {
             Logger.Get().Info(this, $"Registering enabled enemy, type: {entityType}, id: {entityId}");
 
             _entities[(entityType, entityId)] = entity;
-            
+
             if (!_isEnabled) {
                 return isDead;
             }
@@ -177,32 +222,7 @@ namespace Hkmp.Game.Client.Entity {
             // If we have already received the scene status (either scene host or scene client), we still need to
             // initialize this entity probably
             if (_receivedSceneStatus) {
-                if (_isSceneHost) {
-                    entity.InitializeAsSceneHost();
-                } else if (_cachedEntityUpdates != null) {
-                    // If we are a scene host and we have a cache of entity updates, we need to find the
-                    // entity update that corresponds to this entity and initialize them with the state
-                    foreach (var entityUpdate in _cachedEntityUpdates) {
-                        if (entityUpdate.EntityType == (byte) entityType && entityUpdate.Id == entityId) {
-                            entity.InitializeAsSceneClient(
-                                entityUpdate.UpdateTypes.Contains(EntityUpdateType.State)
-                                ? entityUpdate.State
-                                : new byte?()
-                            );
-                            
-                            // After that we update the position and scale
-                            if (entityUpdate.UpdateTypes.Contains(EntityUpdateType.Position)) {
-                                entity.UpdatePosition(entityUpdate.Position);
-                            }
-
-                            if (entityUpdate.UpdateTypes.Contains(EntityUpdateType.Scale)) {
-                                entity.UpdateScale(entityUpdate.Scale);
-                            }
-
-                            break;
-                        }
-                    }
-                }
+                InitializeEntity(entityType, entityId);
             }
 
             return isDead;
@@ -273,6 +293,51 @@ namespace Hkmp.Game.Client.Entity {
             entity.UpdateState(state);
         }
 
+        /**
+         * Initializes an entity with a state if we have one for it.
+         */
+        private void InitializeEntity(
+            EntityType entityType,
+            byte entityId
+        ) {
+            if (!_entities.TryGetValue((entityType, entityId), out var entity)) {
+                Logger.Get().Info(this,
+                    $"Tried to initialize entity for (type, ID) = ({entityType}, {entityId}), but there was no entry");
+                return;
+            }
+
+            // If we are scene host, we can initialize the entity as scene host
+            if (_isSceneHost) {
+                entity.InitializeAsSceneHost();
+                return;
+            }
+
+            // If we are a scene client and we have a cache of entity updates, we need to find the
+            // entity update that corresponds to this entity and initialize them with the state
+            if (_cachedEntityUpdates != null) {
+                foreach (var entityUpdate in _cachedEntityUpdates) {
+                    if (entityUpdate.EntityType == (byte) entityType && entityUpdate.Id == entityId) {
+                        entity.InitializeAsSceneClient(
+                            entityUpdate.UpdateTypes.Contains(EntityUpdateType.State)
+                            ? entityUpdate.State
+                            : new byte?()
+                        );
+
+                        // After that we update the position and scale
+                        if (entityUpdate.UpdateTypes.Contains(EntityUpdateType.Position)) {
+                            entity.UpdatePosition(entityUpdate.Position);
+                        }
+
+                        if (entityUpdate.UpdateTypes.Contains(EntityUpdateType.Scale)) {
+                            entity.UpdateScale(entityUpdate.Scale);
+                        }
+
+                        return;
+                    }
+                }
+            }
+        }
+
         private bool InstantiateEntity(
             string enemyName,
             GameObject gameObject,
@@ -302,14 +367,14 @@ namespace Hkmp.Game.Client.Entity {
                 entity = new FalseKnight(_netClient, entityId, gameObject);
                 return true;
             }
-            
+
             if (enemyName.Contains("Mega Moss Charger")) {
                 entityType = EntityType.MossCharger;
-            
+
                 entityId = GetEnemyId(enemyName.Replace("Mega Moss Charger", ""));
-            
+
                 entity = new MassiveMossCharger(_netClient, entityId, gameObject);
-            
+
                 return true;
             }
             if (enemyName.Contains("Zombie Runner")) {
@@ -321,6 +386,7 @@ namespace Hkmp.Game.Client.Entity {
 
                 return true;
             };
+
             //
             // if (enemyName.Contains("Hornet Boss 1")) {
             //     entityType = EntityType.Hornet1;
