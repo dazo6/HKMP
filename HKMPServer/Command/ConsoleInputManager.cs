@@ -48,6 +48,7 @@ namespace HkmpServer.Command {
         public void StartReading() {
             new Thread(() => {
                 while (true) {
+                    Thread.Sleep(1000);
                     var consoleKeyInfo = Console.ReadKey();
 
                     if (consoleKeyInfo.Key == ConsoleKey.Escape) {
@@ -84,7 +85,6 @@ namespace HkmpServer.Command {
                     CurrentInput += consoleKeyInfo.KeyChar;
 
                     ResetCursor();
-                    Console.Write(CurrentInput);
                 }
                 // ReSharper disable once FunctionNeverReturns
             }).Start();
